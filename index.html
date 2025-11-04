@@ -28,6 +28,7 @@ const CryptoTradingBot = () => {
   const [activeBot, setActiveBot] = useState(false);
   const [trades, setTrades] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('trading');
   const [wallet, setWallet] = useState(null);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
@@ -44,77 +45,130 @@ const CryptoTradingBot = () => {
     takeProfit: 10
   });
 
-  // Génération du wallet sécurisé
   const generateWallet = useCallback(() => {
-    const generateRandomHex = (length) => {
-      const array = new Uint8Array(length);
-      window.crypto.getRandomValues(array);
-      return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-    };
+    try {
+      const generateRandomHex = (length) => {
+        const array = new Uint8Array(length);
+        window.crypto.getRandomValues(array);
+        return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+      };
 
-    const words = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident'];
-    const seedPhrase = Array.from({ length: 12 }, () => words[Math.floor(Math.random() * words.length)]).join(' ');
-    const privateKey = generateRandomHex(32);
-    const publicKey = generateRandomHex(33);
-    const address = '0x' + generateRandomHex(20);
+      const words = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident'];
+      const seedPhrase = Array.from({ length: 12 }, () => words[Math.floor(Math.random() * words.length)]).join(' ');
+      const privateKey = generateRandomHex(32);
+      const publicKey = generateRandomHex(33);
+      const address = '0x' + generateRandomHex(20);
 
-    setWallet({
-      address,
-      publicKey,
-      privateKey,
-      seedPhrase,
-      createdAt: new Date().toISOString()
-    });
+      setWallet({
+        address,
+        publicKey,
+        privateKey,
+        seedPhrase,
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('Erreur génération wallet:', err);
+      setError('Erreur lors de la génération du wallet');
+    }
   }, []);
 
-  // Récupération des données crypto en temps réel
   const fetchCryptoData = useCallback(async () => {
     try {
-      const response = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=24h');
+      setError(null);
+      const response = await fetch(
+        'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=24h',
+        { headers: { 'Accept': 'application/json' } }
+      );
+      
+      if (!response.ok) {
+        throw new Error('Erreur API: ' + response.status);
+      }
+      
       const data = await response.json();
-      setCryptoData(data);
-      setIsLoading(false);
-    } catch (error) {
-      console.error('Erreur:', error);
+      
+      if (Array.isArray(data) && data.length > 0) {
+        setCryptoData(data);
+        setIsLoading(false);
+      } else {
+        throw new Error('Données invalides reçues');
+      }
+    } catch (err) {
+      console.error('Erreur fetch crypto:', err);
+      setError('Impossible de charger les données crypto. Utilisation de données de démo.');
+      setCryptoData([
+        {
+          id: 'bitcoin',
+          symbol: 'btc',
+          name: 'Bitcoin',
+          image: 'https://assets.coingecko.com/coins/images/1/small/bitcoin.png',
+          current_price: 45000,
+          market_cap_rank: 1,
+          price_change_percentage_24h: 2.5
+        },
+        {
+          id: 'ethereum',
+          symbol: 'eth',
+          name: 'Ethereum',
+          image: 'https://assets.coingecko.com/coins/images/279/small/ethereum.png',
+          current_price: 2500,
+          market_cap_rank: 2,
+          price_change_percentage_24h: -1.2
+        }
+      ]);
       setIsLoading(false);
     }
   }, []);
 
   const fetchChartData = useCallback(async (coinId) => {
     try {
-      const response = await fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=7&interval=hourly`);
+      const response = await fetch(
+        'https://api.coingecko.com/api/v3/coins/' + coinId + '/market_chart?vs_currency=usd&days=7&interval=hourly'
+      );
+      
+      if (!response.ok) {
+        throw new Error('Erreur chargement graphique');
+      }
+      
       const data = await response.json();
-      const formattedData = data.prices.map(([timestamp, price]) => ({
-        time: new Date(timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
-        price: price.toFixed(2),
-        timestamp
+      
+      if (data.prices && Array.isArray(data.prices)) {
+        const formattedData = data.prices.map(([timestamp, price]) => ({
+          time: new Date(timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+          price: parseFloat(price.toFixed(2)),
+          timestamp
+        }));
+        setChartData(formattedData.slice(-50));
+      }
+    } catch (err) {
+      console.error('Erreur graphique:', err);
+      const demoData = Array.from({ length: 50 }, (_, i) => ({
+        time: i + 'h',
+        price: 45000 + Math.random() * 1000,
+        timestamp: Date.now() - (50 - i) * 3600000
       }));
-      setChartData(formattedData.slice(-50));
-    } catch (error) {
-      console.error('Erreur graphique:', error);
+      setChartData(demoData);
     }
   }, []);
 
   useEffect(() => {
     generateWallet();
     fetchCryptoData();
-    const interval = setInterval(fetchCryptoData, 30000);
+    const interval = setInterval(fetchCryptoData, 60000);
     return () => clearInterval(interval);
   }, [generateWallet, fetchCryptoData]);
 
   useEffect(() => {
-    if (selectedCrypto) {
+    if (selectedCrypto && cryptoData.length > 0) {
       fetchChartData(selectedCrypto);
     }
-  }, [selectedCrypto, fetchChartData]);
+  }, [selectedCrypto, cryptoData.length, fetchChartData]);
 
-  // Trading automatique
   useEffect(() => {
     if (!activeBot || cryptoData.length === 0) return;
     
     const interval = setInterval(() => {
       const crypto = cryptoData.find(c => c.id === selectedCrypto);
-      if (!crypto) return;
+      if (!crypto || !crypto.current_price) return;
 
       const signal = Math.random() > 0.7 ? (Math.random() > 0.5 ? 'BUY' : 'SELL') : null;
       
@@ -150,7 +204,7 @@ const CryptoTradingBot = () => {
           USD: prev.USD + total,
           crypto: {
             ...prev.crypto,
-            [crypto.id]: Math.max(0, prev.crypto[crypto.id] - quantity)
+            [crypto.id]: Math.max(0, (prev.crypto[crypto.id] || 0) - quantity)
           }
         }));
 
@@ -165,12 +219,11 @@ const CryptoTradingBot = () => {
           strategy: botConfig.strategy
         }, ...prev].slice(0, 50));
       }
-    }, 5000);
+    }, 8000);
 
     return () => clearInterval(interval);
   }, [activeBot, cryptoData, selectedCrypto, balance, botConfig]);
 
-  // Envoyer des crypto
   const handleSend = () => {
     if (!sendForm.address || !sendForm.amount) {
       alert('Veuillez remplir tous les champs');
@@ -178,7 +231,10 @@ const CryptoTradingBot = () => {
     }
 
     const crypto = cryptoData.find(c => c.id === sendForm.crypto);
-    if (!crypto) return;
+    if (!crypto) {
+      alert('Cryptomonnaie non trouvée');
+      return;
+    }
 
     const amount = parseFloat(sendForm.amount);
     const currentBalance = balance.crypto[sendForm.crypto] || 0;
@@ -195,7 +251,7 @@ const CryptoTradingBot = () => {
       id: Date.now(),
       type: 'SEND',
       hash: txHash,
-      from: wallet.address,
+      from: wallet?.address || 'N/A',
       to: sendForm.address,
       amount: amount,
       fee: fee,
@@ -211,16 +267,15 @@ const CryptoTradingBot = () => {
       ...prev,
       crypto: {
         ...prev.crypto,
-        [sendForm.crypto]: Math.max(0, prev.crypto[sendForm.crypto] - (amount + fee))
+        [sendForm.crypto]: Math.max(0, (prev.crypto[sendForm.crypto] || 0) - (amount + fee))
       }
     }));
 
     setWalletTransactions(prev => [transaction, ...prev]);
     setSendForm({ address: '', amount: '', crypto: 'bitcoin' });
-    alert(`Transaction envoyée!\nHash: ${txHash.substring(0, 20)}...`);
+    alert('Transaction envoyée!\nHash: ' + txHash.substring(0, 20) + '...');
   };
 
-  // Recevoir des crypto
   const handleReceive = (cryptoId) => {
     const crypto = cryptoData.find(c => c.id === cryptoId);
     if (!crypto) return;
@@ -233,7 +288,7 @@ const CryptoTradingBot = () => {
       type: 'RECEIVE',
       hash: txHash,
       from: '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
-      to: wallet.address,
+      to: wallet?.address || 'N/A',
       amount: amount,
       fee: 0,
       crypto: crypto.symbol.toUpperCase(),
@@ -253,17 +308,19 @@ const CryptoTradingBot = () => {
     }));
 
     setWalletTransactions(prev => [transaction, ...prev]);
-    alert(`${amount.toFixed(8)} ${crypto.symbol.toUpperCase()} reçus!`);
+    alert(amount.toFixed(8) + ' ' + crypto.symbol.toUpperCase() + ' reçus!');
   };
 
   const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    alert('Copié!');
+    navigator.clipboard.writeText(text).then(
+      () => alert('Copié!'),
+      () => alert('Erreur de copie')
+    );
   };
 
   const totalBalance = balance.USD + Object.entries(balance.crypto).reduce((total, [coinId, qty]) => {
     const crypto = cryptoData.find(c => c.id === coinId);
-    return total + (crypto ? qty * crypto.current_price : 0);
+    return total + (crypto && crypto.current_price ? qty * crypto.current_price : 0);
   }, 0);
 
   const profit = totalBalance - 10000;
@@ -280,17 +337,24 @@ const CryptoTradingBot = () => {
     );
   }
 
+  const selectedCryptoData = cryptoData.find(c => c.id === selectedCrypto);
+
   return (
     <div className="min-h-screen bg-slate-950 text-white p-6">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6 flex items-center justify-between">
+        <div className="mb-6 flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-3">
               <Shield className="text-blue-500" size={32} />
               Plateforme de Trading Sécurisée
             </h1>
             <p className="text-slate-400 mt-1">Wallet intégré + Trading automatisé</p>
+            {error && (
+              <div className="mt-2 text-yellow-500 text-sm flex items-center gap-2">
+                <AlertCircle size={16} />
+                {error}
+              </div>
+            )}
           </div>
           <div className="bg-slate-900 px-6 py-4 rounded-lg border border-slate-800">
             <div className="text-sm text-slate-400 mb-1">Balance Totale</div>
@@ -302,8 +366,7 @@ const CryptoTradingBot = () => {
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="mb-6 flex gap-2 border-b border-slate-800">
+        <div className="mb-6 flex gap-2 border-b border-slate-800 overflow-x-auto">
           {[
             { id: 'trading', icon: Activity, label: 'Trading Bot' },
             { id: 'wallet', icon: Wallet, label: 'Mon Wallet' },
@@ -313,7 +376,7 @@ const CryptoTradingBot = () => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-6 py-3 font-semibold transition-colors flex items-center gap-2 ${
+              className={`px-6 py-3 font-semibold transition-colors flex items-center gap-2 whitespace-nowrap ${
                 activeTab === tab.id 
                   ? 'text-blue-500 border-b-2 border-blue-500' 
                   : 'text-slate-400 hover:text-white'
@@ -325,11 +388,9 @@ const CryptoTradingBot = () => {
           ))}
         </div>
 
-        {/* Trading Tab */}
         {activeTab === 'trading' && (
-          <div className="grid grid-cols-12 gap-6">
-            {/* Configuration Bot */}
-            <div className="col-span-3 space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-3 space-y-4">
               <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
                 <h3 className="font-semibold mb-4 flex items-center gap-2">
                   <Settings size={20} className="text-blue-500" />
@@ -372,7 +433,6 @@ const CryptoTradingBot = () => {
                 </div>
               </div>
 
-              {/* Portefeuille */}
               <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
                 <h3 className="font-semibold mb-4 flex items-center gap-2">
                   <Wallet size={20} className="text-green-500" />
@@ -385,7 +445,7 @@ const CryptoTradingBot = () => {
                   </div>
                   {Object.entries(balance.crypto).map(([coinId, qty]) => {
                     const crypto = cryptoData.find(c => c.id === coinId);
-                    if (!crypto || qty <= 0) return null;
+                    if (!crypto || qty <= 0 || !crypto.current_price) return null;
                     return (
                       <div key={coinId} className="flex justify-between text-sm">
                         <span className="text-slate-400">{crypto.symbol.toUpperCase()}</span>
@@ -400,27 +460,26 @@ const CryptoTradingBot = () => {
               </div>
             </div>
 
-            {/* Graphique */}
-            <div className="col-span-6 space-y-4">
+            <div className="lg:col-span-6 space-y-4">
               <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
                   <div>
                     <h3 className="font-semibold flex items-center gap-2">
                       <BarChart3 size={20} className="text-purple-500" />
-                      {cryptoData.find(c => c.id === selectedCrypto)?.name || 'Bitcoin'}
+                      {selectedCryptoData?.name || 'Bitcoin'}
                     </h3>
-                    {cryptoData.find(c => c.id === selectedCrypto) && (
+                    {selectedCryptoData && (
                       <div className="mt-2 flex items-center gap-4">
                         <span className="text-2xl font-bold">
-                          ${cryptoData.find(c => c.id === selectedCrypto).current_price.toFixed(2)}
+                          ${selectedCryptoData.current_price?.toFixed(2) || '0.00'}
                         </span>
                         <span className={`text-sm flex items-center gap-1 ${
-                          cryptoData.find(c => c.id === selectedCrypto).price_change_percentage_24h >= 0 
+                          (selectedCryptoData.price_change_percentage_24h || 0) >= 0 
                             ? 'text-green-500' : 'text-red-500'
                         }`}>
-                          {cryptoData.find(c => c.id === selectedCrypto).price_change_percentage_24h >= 0 
+                          {(selectedCryptoData.price_change_percentage_24h || 0) >= 0 
                             ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-                          {Math.abs(cryptoData.find(c => c.id === selectedCrypto).price_change_percentage_24h).toFixed(2)}%
+                          {Math.abs(selectedCryptoData.price_change_percentage_24h || 0).toFixed(2)}%
                         </span>
                       </div>
                     )}
@@ -443,7 +502,6 @@ const CryptoTradingBot = () => {
                 </ResponsiveContainer>
               </div>
 
-              {/* Historique Trades */}
               <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
                 <h3 className="font-semibold mb-4">Historique des Trades</h3>
                 <div className="max-h-64 overflow-y-auto space-y-2">
@@ -476,10 +534,9 @@ const CryptoTradingBot = () => {
               </div>
             </div>
 
-            {/* Liste Cryptos */}
-            <div className="col-span-3">
+            <div className="lg:col-span-3">
               <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
-                <h3 className="font-semibold mb-4">Top 100 Crypto</h3>
+                <h3 className="font-semibold mb-4">Top Crypto</h3>
                 <div className="max-h-[700px] overflow-y-auto space-y-2">
                   {cryptoData.map(crypto => (
                     <div
@@ -499,9 +556,9 @@ const CryptoTradingBot = () => {
                         <span className="text-xs text-slate-400">#{crypto.market_cap_rank}</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold">${crypto.current_price.toFixed(2)}</span>
-                        <span className={`text-xs ${crypto.price_change_percentage_24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                          {crypto.price_change_percentage_24h >= 0 ? '↗' : '↘'} {Math.abs(crypto.price_change_percentage_24h).toFixed(2)}%
+                        <span className="text-sm font-semibold">${crypto.current_price?.toFixed(2) || '0.00'}</span>
+                        <span className={`text-xs ${(crypto.price_change_percentage_24h || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {(crypto.price_change_percentage_24h || 0) >= 0 ? '↗' : '↘'} {Math.abs(crypto.price_change_percentage_24h || 0).toFixed(2)}%
                         </span>
                       </div>
                     </div>
@@ -512,9 +569,8 @@ const CryptoTradingBot = () => {
           </div>
         )}
 
-        {/* Wallet Tab */}
         {activeTab === 'wallet' && wallet && (
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-slate-900 p-6 rounded-lg border border-slate-800">
               <h3 className="font-semibold mb-6 text-xl flex items-center gap-2">
                 <Shield size={24} className="text-blue-500" />
@@ -646,7 +702,6 @@ const CryptoTradingBot = () => {
               </div>
             </div>
 
-            {/* Transactions */}
             <div className="bg-slate-900 p-6 rounded-lg border border-slate-800">
               <h3 className="font-semibold mb-6 text-xl flex items-center gap-2">
                 <Activity size={24} className="text-purple-500" />
@@ -702,7 +757,6 @@ const CryptoTradingBot = () => {
           </div>
         )}
 
-        {/* Send Tab */}
         {activeTab === 'send' && (
           <div className="max-w-2xl mx-auto">
             <div className="bg-slate-900 p-8 rounded-lg border border-slate-800">
@@ -760,7 +814,7 @@ const CryptoTradingBot = () => {
                   </div>
                   {sendForm.amount && cryptoData.find(c => c.id === sendForm.crypto) && (
                     <div className="text-sm text-slate-400 mt-2">
-                      ≈ ${(parseFloat(sendForm.amount) * cryptoData.find(c => c.id === sendForm.crypto).current_price).toFixed(2)} USD
+                      ≈ ${(parseFloat(sendForm.amount) * (cryptoData.find(c => c.id === sendForm.crypto)?.current_price || 0)).toFixed(2)} USD
                     </div>
                   )}
                 </div>
@@ -797,9 +851,8 @@ const CryptoTradingBot = () => {
           </div>
         )}
 
-        {/* Receive Tab */}
         {activeTab === 'receive' && wallet && (
-          <div className="max-w-4xl mx-auto grid grid-cols-2 gap-6">
+          <div className="max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-slate-900 p-8 rounded-lg border border-slate-800">
               <h3 className="font-semibold mb-6 text-2xl flex items-center gap-2">
                 <Download size={28} className="text-green-500" />
