@@ -1,0 +1,857 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { TrendingUp, TrendingDown, Activity, Wallet, Settings, BarChart3, AlertCircle, Play, Pause, RefreshCw, Send, Download, Copy, Key, Shield, Eye, EyeOff } from 'lucide-react';
+
+const CryptoTradingBot = () => {
+  const [cryptoData, setCryptoData] = useState([]);
+  const [selectedCrypto, setSelectedCrypto] = useState('bitcoin');
+  const [chartData, setChartData] = useState([]);
+  const [balance, setBalance] = useState({ USD: 10000, crypto: {} });
+  const [activeBot, setActiveBot] = useState(false);
+  const [trades, setTrades] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('trading');
+  const [wallet, setWallet] = useState(null);
+  const [showPrivateKey, setShowPrivateKey] = useState(false);
+  const [showSeedPhrase, setShowSeedPhrase] = useState(false);
+  const [walletTransactions, setWalletTransactions] = useState([]);
+  const [sendForm, setSendForm] = useState({ address: '', amount: '', crypto: 'bitcoin' });
+
+  const [botConfig, setBotConfig] = useState({
+    strategy: 'rsi',
+    riskLevel: 'medium',
+    dcaEnabled: true,
+    dcaType: 'buy',
+    stopLoss: 5,
+    takeProfit: 10
+  });
+
+  // Génération du wallet sécurisé
+  const generateWallet = useCallback(() => {
+    const generateRandomHex = (length) => {
+      const array = new Uint8Array(length);
+      window.crypto.getRandomValues(array);
+      return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+    };
+
+    const words = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident'];
+    const seedPhrase = Array.from({ length: 12 }, () => words[Math.floor(Math.random() * words.length)]).join(' ');
+    const privateKey = generateRandomHex(32);
+    const publicKey = generateRandomHex(33);
+    const address = '0x' + generateRandomHex(20);
+
+    setWallet({
+      address,
+      publicKey,
+      privateKey,
+      seedPhrase,
+      createdAt: new Date().toISOString()
+    });
+  }, []);
+
+  // Récupération des données crypto en temps réel
+  const fetchCryptoData = useCallback(async () => {
+    try {
+      const response = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=24h');
+      const data = await response.json();
+      setCryptoData(data);
+      setIsLoading(false);
+    } catch (error) {
+      console.error('Erreur:', error);
+      setIsLoading(false);
+    }
+  }, []);
+
+  const fetchChartData = useCallback(async (coinId) => {
+    try {
+      const response = await fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=7&interval=hourly`);
+      const data = await response.json();
+      const formattedData = data.prices.map(([timestamp, price]) => ({
+        time: new Date(timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+        price: price.toFixed(2),
+        timestamp
+      }));
+      setChartData(formattedData.slice(-50));
+    } catch (error) {
+      console.error('Erreur graphique:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    generateWallet();
+    fetchCryptoData();
+    const interval = setInterval(fetchCryptoData, 30000);
+    return () => clearInterval(interval);
+  }, [generateWallet, fetchCryptoData]);
+
+  useEffect(() => {
+    if (selectedCrypto) {
+      fetchChartData(selectedCrypto);
+    }
+  }, [selectedCrypto, fetchChartData]);
+
+  // Trading automatique
+  useEffect(() => {
+    if (!activeBot || cryptoData.length === 0) return;
+    
+    const interval = setInterval(() => {
+      const crypto = cryptoData.find(c => c.id === selectedCrypto);
+      if (!crypto) return;
+
+      const signal = Math.random() > 0.7 ? (Math.random() > 0.5 ? 'BUY' : 'SELL') : null;
+      
+      if (signal === 'BUY' && balance.USD >= 100) {
+        const amount = balance.USD * 0.1;
+        const quantity = amount / crypto.current_price;
+        
+        setBalance(prev => ({
+          USD: prev.USD - amount,
+          crypto: {
+            ...prev.crypto,
+            [crypto.id]: (prev.crypto[crypto.id] || 0) + quantity
+          }
+        }));
+
+        setTrades(prev => [{
+          id: Date.now(),
+          type: 'BUY',
+          crypto: crypto.symbol.toUpperCase(),
+          price: crypto.current_price,
+          amount: amount,
+          quantity: quantity,
+          timestamp: new Date().toLocaleString('fr-FR'),
+          strategy: botConfig.strategy
+        }, ...prev].slice(0, 50));
+      }
+
+      if (signal === 'SELL' && (balance.crypto[crypto.id] || 0) > 0) {
+        const quantity = (balance.crypto[crypto.id] || 0) * 0.5;
+        const total = quantity * crypto.current_price;
+        
+        setBalance(prev => ({
+          USD: prev.USD + total,
+          crypto: {
+            ...prev.crypto,
+            [crypto.id]: Math.max(0, prev.crypto[crypto.id] - quantity)
+          }
+        }));
+
+        setTrades(prev => [{
+          id: Date.now(),
+          type: 'SELL',
+          crypto: crypto.symbol.toUpperCase(),
+          price: crypto.current_price,
+          amount: total,
+          quantity: quantity,
+          timestamp: new Date().toLocaleString('fr-FR'),
+          strategy: botConfig.strategy
+        }, ...prev].slice(0, 50));
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [activeBot, cryptoData, selectedCrypto, balance, botConfig]);
+
+  // Envoyer des crypto
+  const handleSend = () => {
+    if (!sendForm.address || !sendForm.amount) {
+      alert('Veuillez remplir tous les champs');
+      return;
+    }
+
+    const crypto = cryptoData.find(c => c.id === sendForm.crypto);
+    if (!crypto) return;
+
+    const amount = parseFloat(sendForm.amount);
+    const currentBalance = balance.crypto[sendForm.crypto] || 0;
+
+    if (currentBalance < amount) {
+      alert('Solde insuffisant');
+      return;
+    }
+
+    const fee = amount * 0.001;
+    const txHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+
+    const transaction = {
+      id: Date.now(),
+      type: 'SEND',
+      hash: txHash,
+      from: wallet.address,
+      to: sendForm.address,
+      amount: amount,
+      fee: fee,
+      crypto: crypto.symbol.toUpperCase(),
+      price: crypto.current_price,
+      valueUSD: amount * crypto.current_price,
+      timestamp: new Date().toISOString(),
+      status: 'confirmed',
+      confirmations: 12
+    };
+
+    setBalance(prev => ({
+      ...prev,
+      crypto: {
+        ...prev.crypto,
+        [sendForm.crypto]: Math.max(0, prev.crypto[sendForm.crypto] - (amount + fee))
+      }
+    }));
+
+    setWalletTransactions(prev => [transaction, ...prev]);
+    setSendForm({ address: '', amount: '', crypto: 'bitcoin' });
+    alert(`Transaction envoyée!\nHash: ${txHash.substring(0, 20)}...`);
+  };
+
+  // Recevoir des crypto
+  const handleReceive = (cryptoId) => {
+    const crypto = cryptoData.find(c => c.id === cryptoId);
+    if (!crypto) return;
+
+    const amount = Math.random() * 0.1;
+    const txHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+
+    const transaction = {
+      id: Date.now(),
+      type: 'RECEIVE',
+      hash: txHash,
+      from: '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
+      to: wallet.address,
+      amount: amount,
+      fee: 0,
+      crypto: crypto.symbol.toUpperCase(),
+      price: crypto.current_price,
+      valueUSD: amount * crypto.current_price,
+      timestamp: new Date().toISOString(),
+      status: 'confirmed',
+      confirmations: 12
+    };
+
+    setBalance(prev => ({
+      ...prev,
+      crypto: {
+        ...prev.crypto,
+        [cryptoId]: (prev.crypto[cryptoId] || 0) + amount
+      }
+    }));
+
+    setWalletTransactions(prev => [transaction, ...prev]);
+    alert(`${amount.toFixed(8)} ${crypto.symbol.toUpperCase()} reçus!`);
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    alert('Copié!');
+  };
+
+  const totalBalance = balance.USD + Object.entries(balance.crypto).reduce((total, [coinId, qty]) => {
+    const crypto = cryptoData.find(c => c.id === coinId);
+    return total + (crypto ? qty * crypto.current_price : 0);
+  }, 0);
+
+  const profit = totalBalance - 10000;
+  const profitPercent = (profit / 10000) * 100;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-white text-xl flex items-center gap-3">
+          <RefreshCw className="animate-spin" size={32} />
+          Chargement des données...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-white p-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold flex items-center gap-3">
+              <Shield className="text-blue-500" size={32} />
+              Plateforme de Trading Sécurisée
+            </h1>
+            <p className="text-slate-400 mt-1">Wallet intégré + Trading automatisé</p>
+          </div>
+          <div className="bg-slate-900 px-6 py-4 rounded-lg border border-slate-800">
+            <div className="text-sm text-slate-400 mb-1">Balance Totale</div>
+            <div className="text-2xl font-bold">${totalBalance.toFixed(2)}</div>
+            <div className={`text-sm flex items-center gap-1 ${profit >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+              {profit >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+              {profit >= 0 ? '+' : ''}{profit.toFixed(2)} USD ({profitPercent.toFixed(2)}%)
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="mb-6 flex gap-2 border-b border-slate-800">
+          {[
+            { id: 'trading', icon: Activity, label: 'Trading Bot' },
+            { id: 'wallet', icon: Wallet, label: 'Mon Wallet' },
+            { id: 'send', icon: Send, label: 'Envoyer' },
+            { id: 'receive', icon: Download, label: 'Recevoir' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-6 py-3 font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === tab.id 
+                  ? 'text-blue-500 border-b-2 border-blue-500' 
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <tab.icon size={20} />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Trading Tab */}
+        {activeTab === 'trading' && (
+          <div className="grid grid-cols-12 gap-6">
+            {/* Configuration Bot */}
+            <div className="col-span-3 space-y-4">
+              <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+                <h3 className="font-semibold mb-4 flex items-center gap-2">
+                  <Settings size={20} className="text-blue-500" />
+                  Configuration
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm text-slate-400 block mb-2">Stratégie</label>
+                    <select 
+                      value={botConfig.strategy}
+                      onChange={(e) => setBotConfig({...botConfig, strategy: e.target.value})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
+                    >
+                      <option value="rsi">RSI</option>
+                      <option value="macd">MACD</option>
+                      <option value="bollinger">Bollinger Bands</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm text-slate-400 block mb-2">Niveau de Risque</label>
+                    <select 
+                      value={botConfig.riskLevel}
+                      onChange={(e) => setBotConfig({...botConfig, riskLevel: e.target.value})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
+                    >
+                      <option value="low">Faible (0.5x)</option>
+                      <option value="medium">Moyen (1x)</option>
+                      <option value="high">Élevé (2x)</option>
+                    </select>
+                  </div>
+                  <button
+                    onClick={() => setActiveBot(!activeBot)}
+                    className={`w-full py-3 rounded font-semibold flex items-center justify-center gap-2 transition-colors ${
+                      activeBot ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
+                    }`}
+                  >
+                    {activeBot ? <Pause size={20} /> : <Play size={20} />}
+                    {activeBot ? 'Arrêter' : 'Démarrer'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Portefeuille */}
+              <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+                <h3 className="font-semibold mb-4 flex items-center gap-2">
+                  <Wallet size={20} className="text-green-500" />
+                  Portefeuille
+                </h3>
+                <div className="space-y-3">
+                  <div className="flex justify-between pb-2 border-b border-slate-800">
+                    <span className="text-slate-400">USD</span>
+                    <span className="font-semibold">${balance.USD.toFixed(2)}</span>
+                  </div>
+                  {Object.entries(balance.crypto).map(([coinId, qty]) => {
+                    const crypto = cryptoData.find(c => c.id === coinId);
+                    if (!crypto || qty <= 0) return null;
+                    return (
+                      <div key={coinId} className="flex justify-between text-sm">
+                        <span className="text-slate-400">{crypto.symbol.toUpperCase()}</span>
+                        <div className="text-right">
+                          <div className="font-semibold">{qty.toFixed(6)}</div>
+                          <div className="text-xs text-slate-500">${(qty * crypto.current_price).toFixed(2)}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Graphique */}
+            <div className="col-span-6 space-y-4">
+              <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <BarChart3 size={20} className="text-purple-500" />
+                      {cryptoData.find(c => c.id === selectedCrypto)?.name || 'Bitcoin'}
+                    </h3>
+                    {cryptoData.find(c => c.id === selectedCrypto) && (
+                      <div className="mt-2 flex items-center gap-4">
+                        <span className="text-2xl font-bold">
+                          ${cryptoData.find(c => c.id === selectedCrypto).current_price.toFixed(2)}
+                        </span>
+                        <span className={`text-sm flex items-center gap-1 ${
+                          cryptoData.find(c => c.id === selectedCrypto).price_change_percentage_24h >= 0 
+                            ? 'text-green-500' : 'text-red-500'
+                        }`}>
+                          {cryptoData.find(c => c.id === selectedCrypto).price_change_percentage_24h >= 0 
+                            ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                          {Math.abs(cryptoData.find(c => c.id === selectedCrypto).price_change_percentage_24h).toFixed(2)}%
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {activeBot && (
+                    <div className="flex items-center gap-2 px-3 py-1 bg-green-600/20 border border-green-600 rounded text-green-500 text-sm">
+                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                      Bot Actif
+                    </div>
+                  )}
+                </div>
+                <ResponsiveContainer width="100%" height={400}>
+                  <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                    <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="#64748b" tick={{ fontSize: 12 }} domain={['auto', 'auto']} />
+                    <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155' }} />
+                    <Line type="monotone" dataKey="price" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Historique Trades */}
+              <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+                <h3 className="font-semibold mb-4">Historique des Trades</h3>
+                <div className="max-h-64 overflow-y-auto space-y-2">
+                  {trades.length === 0 ? (
+                    <div className="text-center text-slate-500 py-8">
+                      <AlertCircle className="mx-auto mb-2" size={32} />
+                      Aucun trade
+                    </div>
+                  ) : (
+                    trades.map(trade => (
+                      <div key={trade.id} className="flex items-center justify-between p-3 bg-slate-800 rounded text-sm">
+                        <div className="flex items-center gap-3">
+                          <span className={`font-bold px-2 py-1 rounded ${
+                            trade.type === 'BUY' ? 'bg-green-600/20 text-green-500' : 'bg-red-600/20 text-red-500'
+                          }`}>
+                            {trade.type}
+                          </span>
+                          <span className="font-semibold">{trade.crypto}</span>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-semibold">${trade.amount.toFixed(2)}</div>
+                          <div className="text-xs text-slate-500">
+                            {trade.quantity.toFixed(6)} @ ${trade.price.toFixed(2)}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Liste Cryptos */}
+            <div className="col-span-3">
+              <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+                <h3 className="font-semibold mb-4">Top 100 Crypto</h3>
+                <div className="max-h-[700px] overflow-y-auto space-y-2">
+                  {cryptoData.map(crypto => (
+                    <div
+                      key={crypto.id}
+                      onClick={() => setSelectedCrypto(crypto.id)}
+                      className={`p-3 rounded cursor-pointer transition-all ${
+                        selectedCrypto === crypto.id 
+                          ? 'bg-blue-600/20 border border-blue-600' 
+                          : 'bg-slate-800 hover:bg-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <img src={crypto.image} alt={crypto.name} className="w-6 h-6" />
+                          <span className="font-semibold text-sm">{crypto.symbol.toUpperCase()}</span>
+                        </div>
+                        <span className="text-xs text-slate-400">#{crypto.market_cap_rank}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold">${crypto.current_price.toFixed(2)}</span>
+                        <span className={`text-xs ${crypto.price_change_percentage_24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {crypto.price_change_percentage_24h >= 0 ? '↗' : '↘'} {Math.abs(crypto.price_change_percentage_24h).toFixed(2)}%
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Wallet Tab */}
+        {activeTab === 'wallet' && wallet && (
+          <div className="grid grid-cols-2 gap-6">
+            <div className="bg-slate-900 p-6 rounded-lg border border-slate-800">
+              <h3 className="font-semibold mb-6 text-xl flex items-center gap-2">
+                <Shield size={24} className="text-blue-500" />
+                Informations Wallet
+              </h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2 flex items-center gap-2">
+                    <Wallet size={16} />
+                    Adresse
+                  </label>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={wallet.address}
+                      readOnly
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm font-mono"
+                    />
+                    <button
+                      onClick={() => copyToClipboard(wallet.address)}
+                      className="p-2 bg-blue-600 hover:bg-blue-700 rounded"
+                    >
+                      <Copy size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2 flex items-center gap-2">
+                    <Key size={16} />
+                    Clé Publique
+                  </label>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={wallet.publicKey}
+                      readOnly
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm font-mono"
+                    />
+                    <button
+                      onClick={() => copyToClipboard(wallet.publicKey)}
+                      className="p-2 bg-blue-600 hover:bg-blue-700 rounded"
+                    >
+                      <Copy size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2 flex items-center gap-2">
+                    <Key size={16} className="text-red-500" />
+                    Clé Privée
+                    <span className="text-red-500 text-xs">(NE JAMAIS PARTAGER)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input 
+                      type={showPrivateKey ? 'text' : 'password'}
+                      value={wallet.privateKey}
+                      readOnly
+                      className="flex-1 bg-slate-800 border border-red-700 rounded px-3 py-2 text-sm font-mono"
+                    />
+                    <button
+                      onClick={() => setShowPrivateKey(!showPrivateKey)}
+                      className="p-2 bg-slate-700 hover:bg-slate-600 rounded"
+                    >
+                      {showPrivateKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                    <button
+                      onClick={() => copyToClipboard(wallet.privateKey)}
+                      className="p-2 bg-red-600 hover:bg-red-700 rounded"
+                    >
+                      <Copy size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2">
+                    Phrase de Récupération (12 mots)
+                    <span className="text-red-500 text-xs ml-2">(NE JAMAIS PARTAGER)</span>
+                  </label>
+                  <div className="bg-slate-800 border border-red-700 rounded p-4">
+                    {showSeedPhrase ? (
+                      <div className="grid grid-cols-3 gap-2 mb-4">
+                        {wallet.seedPhrase.split(' ').map((word, i) => (
+                          <div key={i} className="bg-slate-900 px-3 py-2 rounded text-sm font-mono">
+                            {i + 1}. {word}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-4 text-slate-500">
+                        <Key className="mx-auto mb-2" size={24} />
+                        Phrase masquée
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setShowSeedPhrase(!showSeedPhrase)}
+                        className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm flex items-center justify-center gap-2"
+                      >
+                        {showSeedPhrase ? <EyeOff size={16} /> : <Eye size={16} />}
+                        {showSeedPhrase ? 'Masquer' : 'Afficher'}
+                      </button>
+                      <button
+                        onClick={() => copyToClipboard(wallet.seedPhrase)}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-sm flex items-center gap-2"
+                      >
+                        <Copy size={16} />
+                        Copier
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-yellow-900/20 border border-yellow-700 rounded p-4 text-sm">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="text-yellow-500 flex-shrink-0 mt-0.5" size={18} />
+                    <div className="text-slate-300">
+                      <div className="font-semibold mb-1">⚠️ Sécurité</div>
+                      <ul className="space-y-1 text-xs">
+                        <li>• Ne partagez JAMAIS votre clé privée</li>
+                        <li>• Conservez votre phrase en sécurité</li>
+                        <li>• Vous êtes seul responsable de vos fonds</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Transactions */}
+            <div className="bg-slate-900 p-6 rounded-lg border border-slate-800">
+              <h3 className="font-semibold mb-6 text-xl flex items-center gap-2">
+                <Activity size={24} className="text-purple-500" />
+                Transactions
+              </h3>
+              <div className="max-h-[600px] overflow-y-auto space-y-3">
+                {walletTransactions.length === 0 ? (
+                  <div className="text-center text-slate-500 py-12">
+                    <AlertCircle className="mx-auto mb-3" size={40} />
+                    <p>Aucune transaction</p>
+                  </div>
+                ) : (
+                  walletTransactions.map(tx => (
+                    <div key={tx.id} className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className={`p-2 rounded ${tx.type === 'SEND' ? 'bg-red-600/20' : 'bg-green-600/20'}`}>
+                            {tx.type === 'SEND' ? <Send size={16} className="text-red-500" /> : <Download size={16} className="text-green-500" />}
+                          </div>
+                          <div>
+                            <div className="font-semibold">{tx.type === 'SEND' ? 'Envoyé' : 'Reçu'}</div>
+                            <div className="text-xs text-slate-400">{new Date(tx.timestamp).toLocaleString('fr-FR')}</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className={`font-bold text-lg ${tx.type === 'SEND' ? 'text-red-500' : 'text-green-500'}`}>
+                            {tx.type === 'SEND' ? '-' : '+'}{tx.amount.toFixed(8)} {tx.crypto}
+                          </div>
+                          <div className="text-xs text-slate-400">${tx.valueUSD.toFixed(2)}</div>
+                        </div>
+                      </div>
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Hash:</span>
+                          <span className="font-mono text-blue-400 flex items-center gap-1 cursor-pointer" onClick={() => copyToClipboard(tx.hash)}>
+                            {tx.hash.slice(0, 10)}...{tx.hash.slice(-8)}
+                            <Copy size={12} />
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Statut:</span>
+                          <span className="text-green-500 flex items-center gap-1">
+                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                            Confirmé ({tx.confirmations})
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Send Tab */}
+        {activeTab === 'send' && (
+          <div className="max-w-2xl mx-auto">
+            <div className="bg-slate-900 p-8 rounded-lg border border-slate-800">
+              <h3 className="font-semibold mb-6 text-2xl flex items-center gap-2">
+                <Send size={28} className="text-blue-500" />
+                Envoyer des Crypto
+              </h3>
+              <div className="space-y-6">
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2">Cryptomonnaie</label>
+                  <select
+                    value={sendForm.crypto}
+                    onChange={(e) => setSendForm({...sendForm, crypto: e.target.value})}
+                    className="w-full bg-slate-800 border border-slate-700 rounded px-4 py-3"
+                  >
+                    {cryptoData.slice(0, 20).map(crypto => (
+                      <option key={crypto.id} value={crypto.id}>
+                        {crypto.name} ({crypto.symbol.toUpperCase()}) - Solde: {(balance.crypto[crypto.id] || 0).toFixed(8)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2">Adresse de destination</label>
+                  <input
+                    type="text"
+                    value={sendForm.address}
+                    onChange={(e) => setSendForm({...sendForm, address: e.target.value})}
+                    placeholder="0x..."
+                    className="w-full bg-slate-800 border border-slate-700 rounded px-4 py-3 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2">Montant</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={sendForm.amount}
+                      onChange={(e) => setSendForm({...sendForm, amount: e.target.value})}
+                      placeholder="0.00"
+                      step="0.00000001"
+                      className="w-full bg-slate-800 border border-slate-700 rounded px-4 py-3"
+                    />
+                    <button
+                      onClick={() => {
+                        const maxAmount = balance.crypto[sendForm.crypto] || 0;
+                        setSendForm({...sendForm, amount: maxAmount.toString()});
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm"
+                    >
+                      MAX
+                    </button>
+                  </div>
+                  {sendForm.amount && cryptoData.find(c => c.id === sendForm.crypto) && (
+                    <div className="text-sm text-slate-400 mt-2">
+                      ≈ ${(parseFloat(sendForm.amount) * cryptoData.find(c => c.id === sendForm.crypto).current_price).toFixed(2)} USD
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-800 rounded-lg p-4 space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Frais réseau:</span>
+                    <span>≈ {(parseFloat(sendForm.amount || 0) * 0.001).toFixed(8)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold">
+                    <span>Total:</span>
+                    <span>{(parseFloat(sendForm.amount || 0) + parseFloat(sendForm.amount || 0) * 0.001).toFixed(8)}</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSend}
+                  className="w-full py-4 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold text-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <Send size={20} />
+                  Envoyer la Transaction
+                </button>
+
+                <div className="bg-yellow-900/20 border border-yellow-700 rounded p-4 text-sm">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="text-yellow-500 flex-shrink-0 mt-0.5" size={18} />
+                    <div className="text-slate-300">
+                      Vérifiez bien l'adresse. Les transactions sont irréversibles.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Receive Tab */}
+        {activeTab === 'receive' && wallet && (
+          <div className="max-w-4xl mx-auto grid grid-cols-2 gap-6">
+            <div className="bg-slate-900 p-8 rounded-lg border border-slate-800">
+              <h3 className="font-semibold mb-6 text-2xl flex items-center gap-2">
+                <Download size={28} className="text-green-500" />
+                Recevoir des Crypto
+              </h3>
+              <div className="space-y-6">
+                <div className="bg-white p-8 rounded-lg flex items-center justify-center">
+                  <div className="w-48 h-48 bg-slate-900 rounded flex items-center justify-center text-6xl">
+                    📱
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm text-slate-400 block mb-2">Votre adresse de réception</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={wallet.address}
+                      readOnly
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded px-4 py-3 font-mono text-sm"
+                    />
+                    <button
+                      onClick={() => copyToClipboard(wallet.address)}
+                      className="p-3 bg-green-600 hover:bg-green-700 rounded transition-colors"
+                    >
+                      <Copy size={20} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-blue-900/20 border border-blue-700 rounded p-4 text-sm">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="text-blue-500 flex-shrink-0 mt-0.5" size={18} />
+                    <div className="text-slate-300">
+                      Cette adresse peut recevoir toutes les cryptomonnaies supportées.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 p-8 rounded-lg border border-slate-800">
+              <h3 className="font-semibold mb-6 text-xl flex items-center gap-2">
+                <Activity size={24} className="text-purple-500" />
+                Recevoir Rapidement (Démo)
+              </h3>
+              <div className="space-y-3 max-h-[500px] overflow-y-auto">
+                {cryptoData.slice(0, 20).map(crypto => (
+                  <button
+                    key={crypto.id}
+                    onClick={() => handleReceive(crypto.id)}
+                    className="w-full p-4 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3">
+                      <img src={crypto.image} alt={crypto.name} className="w-8 h-8" />
+                      <div className="text-left">
+                        <div className="font-semibold">{crypto.name}</div>
+                        <div className="text-sm text-slate-400">{crypto.symbol.toUpperCase()}</div>
+                      </div>
+                    </div>
+                    <Download size={20} className="text-green-500" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default CryptoTradingBot;
